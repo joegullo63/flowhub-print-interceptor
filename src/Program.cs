@@ -22,7 +22,8 @@ namespace PrintInterceptor
 {
     internal static class Program
     {
-        private const string MutexName = "Local\\PrintInterceptor.StarMCP31";
+        private const string MutexName = "Local\\FlowhubPrintInterceptor.Instance";
+        private const string StopSignalName = "Local\\FlowhubPrintInterceptor.Stop";
 
         [STAThread]
         private static int Main(string[] args)
@@ -30,6 +31,11 @@ namespace PrintInterceptor
             if (HasArgument(args, "--self-test"))
             {
                 return RunSelfTest();
+            }
+
+            if (HasArgument(args, "--toggle"))
+            {
+                return ToggleRunningState();
             }
 
             bool createdNew;
@@ -51,8 +57,22 @@ namespace PrintInterceptor
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
                     using (var context = new InterceptorContext(settings))
+                    using (var stopSignal = new EventWaitHandle(false, EventResetMode.AutoReset, StopSignalName))
                     {
-                        Application.Run(context);
+                        RegisteredWaitHandle stopRegistration = ThreadPool.RegisterWaitForSingleObject(
+                            stopSignal,
+                            delegate { context.RequestExternalStop(); },
+                            null,
+                            Timeout.Infinite,
+                            true);
+                        try
+                        {
+                            Application.Run(context);
+                        }
+                        finally
+                        {
+                            stopRegistration.Unregister(null);
+                        }
                     }
                     return 0;
                 }
@@ -68,6 +88,101 @@ namespace PrintInterceptor
                     return 1;
                 }
             }
+        }
+
+        private static int ToggleRunningState()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+
+            EventWaitHandle stopSignal;
+            if (TryOpenStopSignal(out stopSignal))
+            {
+                using (stopSignal)
+                {
+                    if (MessageBox.Show(
+                        "Print Interceptor is currently running. Stop it?\r\n\r\n" +
+                        "Receipts will continue to print, but the application will not control the cash drawer while stopped.",
+                        "Stop Print Interceptor",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning,
+                        MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                    {
+                        return 0;
+                    }
+                    stopSignal.Set();
+                }
+
+                bool stopped = WaitForRunningState(false, 5000);
+                MessageBox.Show(
+                    stopped ? "Print Interceptor has stopped." : "A stop request was sent, but the application has not stopped yet.",
+                    "Print Interceptor",
+                    MessageBoxButtons.OK,
+                    stopped ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                return stopped ? 0 : 1;
+            }
+
+            if (MessageBox.Show(
+                "Print Interceptor is currently stopped. Start it now?",
+                "Start Print Interceptor",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1) != DialogResult.Yes)
+            {
+                return 0;
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = Assembly.GetExecutingAssembly().Location,
+                UseShellExecute = true
+            });
+            bool started = WaitForRunningState(true, 5000);
+            MessageBox.Show(
+                started ? "Print Interceptor is running. Look for the shield icon in the notification area." :
+                    "Print Interceptor did not report a successful start. Check the error message or audit log for details.",
+                "Print Interceptor",
+                MessageBoxButtons.OK,
+                started ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            return started ? 0 : 1;
+        }
+
+        private static bool TryOpenStopSignal(out EventWaitHandle signal)
+        {
+            return TryOpenSignal(StopSignalName, out signal);
+        }
+
+        private static bool TryOpenSignal(string signalName, out EventWaitHandle signal)
+        {
+            try
+            {
+                signal = EventWaitHandle.OpenExisting(signalName);
+                return true;
+            }
+            catch (WaitHandleCannotBeOpenedException)
+            {
+                signal = null;
+                return false;
+            }
+        }
+
+        private static bool WaitForRunningState(bool running, int timeoutMilliseconds)
+        {
+            return WaitForSignalState(StopSignalName, running, timeoutMilliseconds);
+        }
+
+        private static bool WaitForSignalState(string signalName, bool running, int timeoutMilliseconds)
+        {
+            Stopwatch timer = Stopwatch.StartNew();
+            while (timer.ElapsedMilliseconds < timeoutMilliseconds)
+            {
+                EventWaitHandle signal;
+                bool detected = TryOpenSignal(signalName, out signal);
+                if (signal != null) signal.Dispose();
+                if (detected == running) return true;
+                Thread.Sleep(100);
+            }
+            return false;
         }
 
         private static bool HasArgument(string[] args, string wanted)
@@ -130,6 +245,15 @@ namespace PrintInterceptor
                 {
                     throw new InvalidOperationException("GitHub release parsing failed its known-value test.");
                 }
+
+                string controlFixtureName = "Local\\FlowhubPrintInterceptor.SelfTest." + Guid.NewGuid().ToString("N");
+                using (var controlFixture = new EventWaitHandle(false, EventResetMode.AutoReset, controlFixtureName))
+                {
+                    if (!WaitForSignalState(controlFixtureName, true, 1000))
+                        throw new InvalidOperationException("Desktop control failed to detect a running-state signal.");
+                }
+                if (!WaitForSignalState(controlFixtureName, false, 1000))
+                    throw new InvalidOperationException("Desktop control failed to detect a stopped-state signal.");
 
                 string printerError;
                 if (!string.Equals(settings.PrinterName, "CONFIGURED_BY_INSTALLER", StringComparison.OrdinalIgnoreCase) &&
@@ -1156,6 +1280,12 @@ namespace PrintInterceptor
             }
             Logger.Write("EXIT", "Operator exited application.");
             ExitThread();
+        }
+
+        public void RequestExternalStop()
+        {
+            Logger.Write("STOP_REQUESTED", "Desktop start/stop shortcut.");
+            InvokeOnUi(delegate { ExitThread(); });
         }
 
         protected override void ExitThreadCore()

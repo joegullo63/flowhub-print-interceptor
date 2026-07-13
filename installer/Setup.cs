@@ -6,6 +6,7 @@ using System.Drawing.Printing;
 using System.IO;
 using System.Management;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Security.Principal;
 using System.Text;
@@ -231,6 +232,8 @@ namespace PrintInterceptorSetup
         private readonly TextBox _receiptHeader = new TextBox();
         private readonly TextBox _fulfillmentHeader = new TextBox();
         private readonly TextBox _flowhubDirectory = new TextBox();
+        private readonly CheckBox _startWithWindows = new CheckBox();
+        private readonly CheckBox _desktopShortcut = new CheckBox();
         private readonly Button _install = new Button();
         private readonly Label _status = new Label();
         private FlowhubConfiguration _flowhubConfiguration;
@@ -239,8 +242,8 @@ namespace PrintInterceptorSetup
         {
             Text = "Print Interceptor Setup";
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(760, 735);
-            MinimumSize = new Size(776, 774);
+            ClientSize = new Size(760, 850);
+            MinimumSize = new Size(776, 889);
             Font = new Font("Segoe UI", 9.5F);
             Icon = SystemIcons.Shield;
 
@@ -264,15 +267,16 @@ namespace PrintInterceptorSetup
             BuildFlowhubGroup();
             BuildDrawerGroup();
             BuildClassificationGroup();
+            BuildStartupGroup();
 
             _install.Text = "Install and Start";
             _install.Font = new Font(Font, FontStyle.Bold);
-            _install.SetBounds(555, 674, 170, 42);
+            _install.SetBounds(555, 789, 170, 42);
             _install.Click += InstallClicked;
             Controls.Add(_install);
 
-            _status.SetBounds(28, 677, 510, 38);
-            _status.Text = "Complete all four sections, then install.";
+            _status.SetBounds(28, 792, 510, 38);
+            _status.Text = "Complete all five sections, then install.";
             Controls.Add(_status);
 
             Load += delegate { RefreshEverything(); };
@@ -365,6 +369,27 @@ namespace PrintInterceptorSetup
             group.Controls.Add(note);
         }
 
+        private void BuildStartupGroup()
+        {
+            GroupBox group = Group("5. Choose startup and desktop controls", 24, 670, 712, 105);
+            _startWithWindows.Text = "Start Print Interceptor automatically when this Windows user signs in (recommended).";
+            _startWithWindows.Checked = true;
+            _startWithWindows.SetBounds(18, 27, 665, 24);
+            _desktopShortcut.Text = "Add a desktop shortcut that asks before starting or stopping Print Interceptor.";
+            _desktopShortcut.Checked = true;
+            _desktopShortcut.SetBounds(18, 55, 665, 24);
+            var note = new Label
+            {
+                Text = "The shortcut never opens the drawer; it only turns receipt monitoring on or off.",
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Location = new Point(37, 80)
+            };
+            group.Controls.Add(_startWithWindows);
+            group.Controls.Add(_desktopShortcut);
+            group.Controls.Add(note);
+        }
+
         private GroupBox Group(string text, int x, int y, int width, int height)
         {
             var group = new GroupBox { Text = text };
@@ -397,6 +422,11 @@ namespace PrintInterceptorSetup
             _flowhubDirectory.Text = existing.TryGetValue("FlowhubPrintDirectory", out value)
                 ? Environment.ExpandEnvironmentVariables(value)
                 : SetupDiscovery.FindFlowhubPrintDirectory();
+            if (existing.Count > 0)
+            {
+                _startWithWindows.Checked = Installer.BooleanSetting(existing, "StartWithWindows", Installer.StartupEnabled());
+                _desktopShortcut.Checked = Installer.BooleanSetting(existing, "DesktopShortcut", true);
+            }
             RefreshFlowhub();
         }
 
@@ -469,12 +499,16 @@ namespace PrintInterceptorSetup
                     selected.Name,
                     _flowhubDirectory.Text,
                     _receiptHeader.Text.Trim(),
-                    _fulfillmentHeader.Text.Trim());
+                    _fulfillmentHeader.Text.Trim(),
+                    _startWithWindows.Checked,
+                    _desktopShortcut.Checked);
                 _status.ForeColor = Color.DarkGreen;
                 _status.Text = "Installed and running. Look for the shield icon in the notification area.";
                 MessageBox.Show(
                     this,
                     "Print Interceptor is installed and running.\r\n\r\n" +
+                    (_startWithWindows.Checked ? "It will start automatically when this Windows user signs in.\r\n" : "Automatic startup is disabled.\r\n") +
+                    (_desktopShortcut.Checked ? "A Start or Stop shortcut was added to the desktop.\r\n\r\n" : "No desktop shortcut was created.\r\n\r\n") +
                     "Test a real fulfillment ticket first: it should print while the drawer stays locked. " +
                     "Then test a transaction receipt: the drawer should open once without a prompt.",
                     "Installation complete",
@@ -541,19 +575,60 @@ namespace PrintInterceptorSetup
             if (!File.Exists(configuration))
                 throw new FileNotFoundException("The installed terminal configuration was not found.", configuration);
 
+            Dictionary<string, string> settings = SetupDiscovery.ExistingInterceptorSettings();
+            bool startWithWindows = BooleanSetting(settings, "StartWithWindows", StartupEnabled());
+            bool desktopShortcut;
+            if (!TryBooleanSetting(settings, "DesktopShortcut", out desktopShortcut))
+            {
+                desktopShortcut = MessageBox.Show(
+                    "Add a desktop shortcut that asks before starting or stopping Print Interceptor?",
+                    "Print Interceptor desktop control",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question,
+                    MessageBoxDefaultButton.Button1) == DialogResult.Yes;
+            }
+
             StopExisting();
             Directory.CreateDirectory(installDirectory);
             Payload.WriteTo(executable);
-            using (RegistryKey run = Registry.CurrentUser.CreateSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run"))
-                run.SetValue("PrintInterceptor", "\"" + executable + "\"", RegistryValueKind.String);
+            ConfigureStartup(executable, startWithWindows);
+            ConfigureDesktopShortcut(executable, desktopShortcut);
+            SetConfigurationBoolean(configuration, "StartWithWindows", startWithWindows);
+            SetConfigurationBoolean(configuration, "DesktopShortcut", desktopShortcut);
             StartLimited(executable);
+        }
+
+        public static bool StartupEnabled()
+        {
+            using (RegistryKey run = Registry.CurrentUser.OpenSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run"))
+                return run != null && run.GetValue("PrintInterceptor") != null;
+        }
+
+        public static bool DesktopShortcutExists()
+        {
+            return File.Exists(DesktopShortcutPath());
+        }
+
+        public static bool BooleanSetting(Dictionary<string, string> settings, string key, bool fallback)
+        {
+            bool value;
+            return TryBooleanSetting(settings, key, out value) ? value : fallback;
+        }
+
+        private static bool TryBooleanSetting(Dictionary<string, string> settings, string key, out bool value)
+        {
+            value = false;
+            string text;
+            return settings.TryGetValue(key, out text) && bool.TryParse(text, out value);
         }
 
         public static void Install(
             string printerName,
             string flowhubDirectory,
             string receiptHeader,
-            string fulfillmentHeader)
+            string fulfillmentHeader,
+            bool startWithWindows,
+            bool desktopShortcut)
         {
             EnsureAdministrator();
             StopExisting();
@@ -565,18 +640,82 @@ namespace PrintInterceptorSetup
             string executable = Path.Combine(installDirectory, "PrintInterceptor.exe");
             Payload.WriteTo(executable);
             File.WriteAllText(executable + ".config", Configuration(
-                printerName, flowhubDirectory, receiptHeader, fulfillmentHeader), Encoding.UTF8);
+                printerName, flowhubDirectory, receiptHeader, fulfillmentHeader,
+                startWithWindows, desktopShortcut), Encoding.UTF8);
 
             RunAndCheck(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "wevtutil.exe"),
                 "sl Microsoft-Windows-PrintService/Operational /e:true");
 
-            using (RegistryKey run = Registry.CurrentUser.CreateSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run"))
-                run.SetValue("PrintInterceptor", "\"" + executable + "\"", RegistryValueKind.String);
+            ConfigureStartup(executable, startWithWindows);
+            ConfigureDesktopShortcut(executable, desktopShortcut);
 
             StartLimited(executable);
         }
 
-        private static string Configuration(string printer, string directory, string receipt, string fulfillment)
+        private static void ConfigureStartup(string executable, bool enabled)
+        {
+            using (RegistryKey run = Registry.CurrentUser.CreateSubKey("Software\\Microsoft\\Windows\\CurrentVersion\\Run"))
+            {
+                if (enabled)
+                    run.SetValue("PrintInterceptor", "\"" + executable + "\"", RegistryValueKind.String);
+                else
+                    run.DeleteValue("PrintInterceptor", false);
+            }
+        }
+
+        private static string DesktopShortcutPath()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                "Print Interceptor - Start or Stop.lnk");
+        }
+
+        private static void ConfigureDesktopShortcut(string executable, bool enabled)
+        {
+            string shortcutPath = DesktopShortcutPath();
+            if (!enabled)
+            {
+                if (File.Exists(shortcutPath)) File.Delete(shortcutPath);
+                return;
+            }
+
+            Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null)
+                throw new InvalidOperationException("Windows Script Host is unavailable, so the desktop shortcut could not be created.");
+
+            object shell = null;
+            object shortcut = null;
+            try
+            {
+                shell = Activator.CreateInstance(shellType);
+                shortcut = shellType.InvokeMember(
+                    "CreateShortcut",
+                    BindingFlags.InvokeMethod,
+                    null,
+                    shell,
+                    new object[] { shortcutPath });
+                Type shortcutType = shortcut.GetType();
+                shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { executable });
+                shortcutType.InvokeMember("Arguments", BindingFlags.SetProperty, null, shortcut, new object[] { "--toggle" });
+                shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { Path.GetDirectoryName(executable) });
+                shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "Start or stop Print Interceptor" });
+                shortcutType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, shortcut, new object[] { executable + ",0" });
+                shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
+            }
+            finally
+            {
+                if (shortcut != null && Marshal.IsComObject(shortcut)) Marshal.FinalReleaseComObject(shortcut);
+                if (shell != null && Marshal.IsComObject(shell)) Marshal.FinalReleaseComObject(shell);
+            }
+        }
+
+        private static string Configuration(
+            string printer,
+            string directory,
+            string receipt,
+            string fulfillment,
+            bool startWithWindows,
+            bool desktopShortcut)
         {
             return "<?xml version=\"1.0\" encoding=\"utf-8\" ?>\r\n" +
                 "<configuration>\r\n" +
@@ -592,7 +731,27 @@ namespace PrintInterceptorSetup
                 Add("ClassificationWindowSeconds", "120") +
                 Add("ReleaseRepository", "joegullo63/flowhub-print-interceptor") +
                 Add("UpdateCheckHours", "6") +
+                Add("StartWithWindows", startWithWindows.ToString()) +
+                Add("DesktopShortcut", desktopShortcut.ToString()) +
                 "  </appSettings>\r\n</configuration>\r\n";
+        }
+
+        private static void SetConfigurationBoolean(string path, string key, bool value)
+        {
+            var document = new XmlDocument();
+            document.PreserveWhitespace = true;
+            document.Load(path);
+            XmlElement appSettings = document.SelectSingleNode("/configuration/appSettings") as XmlElement;
+            if (appSettings == null) throw new InvalidDataException("The installed configuration has no appSettings section.");
+            XmlElement setting = appSettings.SelectSingleNode("add[@key='" + key + "']") as XmlElement;
+            if (setting == null)
+            {
+                setting = document.CreateElement("add");
+                setting.SetAttribute("key", key);
+                appSettings.AppendChild(setting);
+            }
+            setting.SetAttribute("value", value.ToString());
+            document.Save(path);
         }
 
         private static string Add(string key, string value)

@@ -21,7 +21,8 @@ The guided installer:
 3. opens the selected printer's properties and requires confirmation that both Star **Peripheral Unit Timing** values are **None**;
 4. asks for the transaction and fulfillment PDF headers;
 5. detects Flowhub's live PDF directory;
-6. enables the Windows PrintService Operational log, installs the tray app, and registers startup.
+6. asks for confirmation before enabling automatic sign-in startup and adding the desktop Start/Stop shortcut;
+7. enables the Windows PrintService Operational log, installs the tray app, and starts it.
 
 The installer is currently unsigned, so Windows SmartScreen may show an unrecognized-app warning. Review the GitHub Release checksum before choosing **More info > Run anyway**. Code signing is recommended before broad deployment.
 
@@ -42,6 +43,12 @@ The tray app checks this repository's latest public GitHub Release at startup an
 
 Updates preserve the terminal's printer, PDF folder, receipt markers, pulse timing, and timeout configuration.
 
+## Starting and stopping
+
+When selected during setup, **Print Interceptor - Start or Stop** is added to the current user's desktop. Opening it reports whether the interceptor is currently running and asks for confirmation before changing that state. Stopping the interceptor does not stop receipt printing, but automatic drawer control remains unavailable until it is started again.
+
+The recommended setup option also starts Print Interceptor automatically whenever the POS Windows user signs in. Rerun the installer to change either preference.
+
 ## Build
 
 No third-party development packages are required on Windows 11. The build uses the installed .NET Framework 4.8 compiler:
@@ -55,7 +62,7 @@ Outputs:
 - `dist\PrintInterceptor.exe`
 - `dist\PrintInterceptorSetup.exe` - a single-file portable installer containing the tray application
 
-The build runs a non-hardware self-test covering configuration, Windows event parsing, compressed PDF extraction, update metadata parsing, and drawer-command generation. It sends no printer bytes and cannot open the drawer.
+The build runs a non-hardware self-test covering configuration, Windows event parsing, compressed PDF extraction, update metadata parsing, desktop-control signaling, and drawer-command generation. It sends no printer bytes and cannot open the drawer.
 
 ## Release
 
