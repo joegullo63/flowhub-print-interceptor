@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag and build
+        shell: powershell
+        run: |
+          $match = Select-String -Path .\src\Version.cs -Pattern 'Value = "(?<version>\d+\.\d+\.\d+)"'
+          if (-not $match.Matches.Success) { throw 'Could not read BuildVersion from src/Version.cs.' }
+          $version = $match.Matches[0].Groups['version'].Value
+          if ($env:GITHUB_REF_NAME -ne "v$version") { throw "Tag $env:GITHUB_REF_NAME does not match source version v$version." }
+          .\scripts\Build.ps1
+          $hash = (Get-FileHash .\dist\PrintInterceptorSetup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath .\dist\PrintInterceptorSetup.exe.sha256 -Value "$hash  PrintInterceptorSetup.exe" -Encoding ascii
+      - name: Publish GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            .\dist\PrintInterceptorSetup.exe `
+            .\dist\PrintInterceptorSetup.exe.sha256 `
+            --title "Print Interceptor $env:GITHUB_REF_NAME" `
+            --generate-notes
+

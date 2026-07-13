@@ -1,0 +1,14 @@
+dist/
+*.user
+*.suo
+.vs/
+*.log
+*.pdf
+*.spl
+*.shd
+app.asar
+print-util/
+FlowhubMaui/
+packages/
+artifacts/
+
