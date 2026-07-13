@@ -42,7 +42,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Built and self-tested: $(Join-Path $dist 'PrintInterceptor.exe')"
-Write-Host 'The self-test validated configuration, event parsing, PDF extraction, update metadata parsing, and drawer-command generation without accessing printer hardware.'
+Write-Host 'The self-test validated configuration, event parsing, PDF extraction, update metadata parsing, desktop-control signaling, and drawer-command generation without accessing printer hardware.'
 
 $setupSource = Join-Path $projectRoot 'installer\Setup.cs'
 $setupManifest = Join-Path $projectRoot 'installer\setup.manifest'
