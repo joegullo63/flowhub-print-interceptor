@@ -11,7 +11,7 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify tag and build
         shell: powershell
         run: |
@@ -32,4 +32,3 @@ jobs:
             .\dist\PrintInterceptorSetup.exe.sha256 `
             --title "Print Interceptor $env:GITHUB_REF_NAME" `
             --generate-notes
-
