@@ -71,4 +71,17 @@ if ($LASTEXITCODE -ne 0) {
     throw "Setup compilation failed with exit code $LASTEXITCODE"
 }
 
+$setupAssembly = [Reflection.Assembly]::LoadFile($setupOutput)
+if ($setupAssembly.GetManifestResourceNames() -notcontains 'PrintInterceptor.Payload.exe') {
+    throw 'The setup executable does not contain the embedded interceptor payload.'
+}
+$discoveryType = $setupAssembly.GetType('PrintInterceptorSetup.SetupDiscovery', $true)
+$directoryMethod = $discoveryType.GetMethod('StandardFlowhubPrintDirectory', [Reflection.BindingFlags]'Public,Static')
+$actualDirectory = [string]$directoryMethod.Invoke($null, $null)
+$expectedDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)) 'FlowhubMaui\print-util\printFiles'
+if ($actualDirectory -ne $expectedDirectory) {
+    throw "Setup selected an unexpected standard Flowhub directory: $actualDirectory"
+}
+
 Write-Host "Portable single-file installer: $setupOutput"
+Write-Host "Validated automatic Flowhub folder: $actualDirectory"

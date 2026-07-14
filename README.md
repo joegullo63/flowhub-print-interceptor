@@ -20,7 +20,7 @@ The guided installer:
 2. detects Flowhub's receipt and fulfillment selections, or requires manual confirmation;
 3. opens the selected printer's properties and requires confirmation that both Star **Peripheral Unit Timing** values are **None**;
 4. asks for the transaction and fulfillment PDF headers;
-5. detects Flowhub's live PDF directory;
+5. automatically uses the signed-in user's `%APPDATA%\FlowhubMaui\print-util\printFiles` directory when it exists, with manual selection enabled only as a fallback;
 6. asks for confirmation before enabling automatic sign-in startup and adding the desktop Start/Stop shortcut;
 7. enables the Windows PrintService Operational log, installs the tray app, and starts it.
 
@@ -42,6 +42,8 @@ Flowhub's test receipt/fulfillment assets intentionally follow the unknown-job p
 The tray app checks this repository's latest public GitHub Release at startup and every six hours. When a newer version exists, it asks the operator before downloading. The installer and its published SHA-256 checksum must match before Windows is asked for administrator approval.
 
 Updates preserve the terminal's printer, PDF folder, receipt markers, pulse timing, and timeout configuration.
+
+When updating an older installation, setup automatically corrects the configured PDF folder to the standard per-user Flowhub folder if that folder exists. A working nonstandard folder is preserved when the standard folder is absent.
 
 ## Starting and stopping
 
