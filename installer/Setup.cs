@@ -153,29 +153,9 @@ namespace PrintInterceptorSetup
             return null;
         }
 
-        public static string FindFlowhubPrintDirectory()
+        public static string StandardFlowhubPrintDirectory()
         {
             string roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var candidates = new List<string>();
-            candidates.Add(Path.Combine(roaming, "FlowhubMaui", "print-util", "printFiles"));
-            try
-            {
-                foreach (string directory in Directory.GetDirectories(roaming))
-                    candidates.Add(Path.Combine(directory, "print-util", "printFiles"));
-            }
-            catch { }
-
-            foreach (string candidate in candidates)
-            {
-                try
-                {
-                    if (Directory.Exists(candidate) &&
-                        (File.Exists(Path.Combine(candidate, "test-receipt.pdf")) ||
-                         Directory.GetFiles(candidate, "*-receipt.pdf").Length > 0))
-                        return candidate;
-                }
-                catch { }
-            }
             return Path.Combine(roaming, "FlowhubMaui", "print-util", "printFiles");
         }
 
@@ -232,6 +212,8 @@ namespace PrintInterceptorSetup
         private readonly TextBox _receiptHeader = new TextBox();
         private readonly TextBox _fulfillmentHeader = new TextBox();
         private readonly TextBox _flowhubDirectory = new TextBox();
+        private readonly Button _browseFlowhubDirectory = new Button();
+        private readonly Label _flowhubDirectoryStatus = new Label();
         private readonly CheckBox _startWithWindows = new CheckBox();
         private readonly CheckBox _desktopShortcut = new CheckBox();
         private readonly Button _install = new Button();
@@ -242,8 +224,8 @@ namespace PrintInterceptorSetup
         {
             Text = "Print Interceptor Setup";
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(760, 850);
-            MinimumSize = new Size(776, 889);
+            ClientSize = new Size(760, 870);
+            MinimumSize = new Size(776, 909);
             Font = new Font("Segoe UI", 9.5F);
             Icon = SystemIcons.Shield;
 
@@ -271,11 +253,11 @@ namespace PrintInterceptorSetup
 
             _install.Text = "Install and Start";
             _install.Font = new Font(Font, FontStyle.Bold);
-            _install.SetBounds(555, 789, 170, 42);
+            _install.SetBounds(555, 809, 170, 42);
             _install.Click += InstallClicked;
             Controls.Add(_install);
 
-            _status.SetBounds(28, 792, 510, 38);
+            _status.SetBounds(28, 812, 510, 38);
             _status.Text = "Complete all five sections, then install.";
             Controls.Add(_status);
 
@@ -308,7 +290,11 @@ namespace PrintInterceptorSetup
                 else Process.Start(path);
             };
             var refresh = new Button { Text = "Refresh detection", Location = new Point(148, 82), Size = new Size(135, 30) };
-            refresh.Click += delegate { RefreshFlowhub(); };
+            refresh.Click += delegate
+            {
+                RefreshFlowhub();
+                RefreshFlowhubDirectory(_flowhubDirectory.Text);
+            };
             _flowhubConfirmed.Text = "I verified Flowhub Receipts and Fulfillment both use the selected printer.";
             _flowhubConfirmed.SetBounds(18, 119, 650, 24);
             group.Controls.Add(_flowhubStatus);
@@ -340,7 +326,7 @@ namespace PrintInterceptorSetup
 
         private void BuildClassificationGroup()
         {
-            GroupBox group = Group("4. Confirm Flowhub receipt markers", 24, 510, 712, 150);
+            GroupBox group = Group("4. Confirm Flowhub receipt markers and PDF folder", 24, 510, 712, 170);
             group.Controls.Add(new Label { Text = "Transaction header:", AutoSize = true, Location = new Point(18, 31) });
             _receiptHeader.SetBounds(155, 27, 205, 28);
             group.Controls.Add(_receiptHeader);
@@ -349,29 +335,41 @@ namespace PrintInterceptorSetup
             group.Controls.Add(_fulfillmentHeader);
             group.Controls.Add(new Label { Text = "Flowhub PDF folder:", AutoSize = true, Location = new Point(18, 73) });
             _flowhubDirectory.SetBounds(155, 69, 452, 28);
-            var browse = new Button { Text = "Browse...", Location = new Point(615, 67), Size = new Size(70, 30) };
-            browse.Click += delegate
+            _flowhubDirectory.TextChanged += delegate
+            {
+                if (_browseFlowhubDirectory.Enabled) UpdateManualFlowhubDirectoryStatus();
+            };
+            _browseFlowhubDirectory.Text = "Browse...";
+            _browseFlowhubDirectory.SetBounds(615, 67, 70, 30);
+            _browseFlowhubDirectory.Click += delegate
             {
                 using (var dialog = new FolderBrowserDialog())
                 {
                     dialog.SelectedPath = _flowhubDirectory.Text;
-                    if (dialog.ShowDialog(this) == DialogResult.OK) _flowhubDirectory.Text = dialog.SelectedPath;
+                    if (dialog.ShowDialog(this) == DialogResult.OK)
+                    {
+                        _flowhubDirectory.Text = dialog.SelectedPath;
+                        UpdateManualFlowhubDirectoryStatus();
+                    }
                 }
             };
-            group.Controls.Add(browse);
+            group.Controls.Add(_browseFlowhubDirectory);
+            _flowhubDirectoryStatus.SetBounds(155, 99, 530, 24);
+            _flowhubDirectoryStatus.AutoEllipsis = true;
+            group.Controls.Add(_flowhubDirectoryStatus);
             var note = new Label
             {
                 Text = "Both Flowhub's internal filename type and the matching PDF header are required for automatic action.",
                 AutoSize = true,
                 ForeColor = Color.DimGray,
-                Location = new Point(18, 112)
+                Location = new Point(18, 134)
             };
             group.Controls.Add(note);
         }
 
         private void BuildStartupGroup()
         {
-            GroupBox group = Group("5. Choose startup and desktop controls", 24, 670, 712, 105);
+            GroupBox group = Group("5. Choose startup and desktop controls", 24, 690, 712, 105);
             _startWithWindows.Text = "Start Print Interceptor automatically when this Windows user signs in (recommended).";
             _startWithWindows.Checked = true;
             _startWithWindows.SetBounds(18, 27, 665, 24);
@@ -419,9 +417,10 @@ namespace PrintInterceptorSetup
             string value;
             _receiptHeader.Text = existing.TryGetValue("ReceiptHeader", out value) ? value : string.Empty;
             _fulfillmentHeader.Text = existing.TryGetValue("FulfillmentHeader", out value) ? value : "In-Store-Fulfillment";
-            _flowhubDirectory.Text = existing.TryGetValue("FlowhubPrintDirectory", out value)
+            string configuredFlowhubDirectory = existing.TryGetValue("FlowhubPrintDirectory", out value)
                 ? Environment.ExpandEnvironmentVariables(value)
-                : SetupDiscovery.FindFlowhubPrintDirectory();
+                : string.Empty;
+            RefreshFlowhubDirectory(configuredFlowhubDirectory);
             if (existing.Count > 0)
             {
                 _startWithWindows.Checked = Installer.BooleanSetting(existing, "StartWithWindows", Installer.StartupEnabled());
@@ -442,6 +441,45 @@ namespace PrintInterceptorSetup
         {
             _flowhubConfiguration = SetupDiscovery.FindFlowhubConfiguration();
             RefreshFlowhubStatus();
+        }
+
+        private void RefreshFlowhubDirectory(string manualFallback)
+        {
+            string standard = SetupDiscovery.StandardFlowhubPrintDirectory();
+            ConfigureFlowhubDirectory(standard, manualFallback);
+        }
+
+        private void ConfigureFlowhubDirectory(string standard, string manualFallback)
+        {
+            if (Directory.Exists(standard))
+            {
+                _browseFlowhubDirectory.Enabled = false;
+                _flowhubDirectory.ReadOnly = true;
+                _flowhubDirectory.Text = standard;
+                _flowhubDirectoryStatus.Text = "Automatically detected for this Windows user; no selection is needed.";
+                _flowhubDirectoryStatus.ForeColor = Color.DarkGreen;
+                return;
+            }
+
+            _browseFlowhubDirectory.Enabled = true;
+            _flowhubDirectory.ReadOnly = false;
+            _flowhubDirectory.Text = !string.IsNullOrWhiteSpace(manualFallback) && Directory.Exists(manualFallback)
+                ? manualFallback
+                : standard;
+            UpdateManualFlowhubDirectoryStatus();
+        }
+
+        private void UpdateManualFlowhubDirectoryStatus()
+        {
+            if (Directory.Exists(_flowhubDirectory.Text))
+            {
+                _flowhubDirectoryStatus.Text = "Using a manual fallback folder. Confirm that this is Flowhub's printFiles folder.";
+            }
+            else
+            {
+                _flowhubDirectoryStatus.Text = "Standard folder not found. Open Flowhub once, refresh, or browse/paste a fallback.";
+            }
+            _flowhubDirectoryStatus.ForeColor = Color.DarkOrange;
         }
 
         private void RefreshFlowhubStatus()
@@ -486,7 +524,14 @@ namespace PrintInterceptorSetup
             if (!_timingOne.Checked || !_timingTwo.Checked) { Fail("Confirm that both Star peripheral timing values are None."); return; }
             if (string.IsNullOrWhiteSpace(_receiptHeader.Text) || string.IsNullOrWhiteSpace(_fulfillmentHeader.Text))
             { Fail("Both classification headers are required."); return; }
-            if (!Directory.Exists(_flowhubDirectory.Text)) { Fail("The Flowhub PDF folder does not exist."); return; }
+            if (!Directory.Exists(_flowhubDirectory.Text))
+            {
+                Fail(
+                    "The Flowhub PDF folder does not exist.\r\n\r\n" +
+                    "Expected: " + SetupDiscovery.StandardFlowhubPrintDirectory() + "\r\n\r\n" +
+                    "Open Flowhub once and click Refresh detection, or select a valid fallback folder.");
+                return;
+            }
 
             _install.Enabled = false;
             UseWaitCursor = true;
@@ -595,6 +640,9 @@ namespace PrintInterceptorSetup
             ConfigureDesktopShortcut(executable, desktopShortcut);
             SetConfigurationBoolean(configuration, "StartWithWindows", startWithWindows);
             SetConfigurationBoolean(configuration, "DesktopShortcut", desktopShortcut);
+            string standardFlowhubDirectory = SetupDiscovery.StandardFlowhubPrintDirectory();
+            if (Directory.Exists(standardFlowhubDirectory))
+                SetConfigurationValue(configuration, "FlowhubPrintDirectory", standardFlowhubDirectory);
             StartLimited(executable);
         }
 
@@ -738,6 +786,11 @@ namespace PrintInterceptorSetup
 
         private static void SetConfigurationBoolean(string path, string key, bool value)
         {
+            SetConfigurationValue(path, key, value.ToString());
+        }
+
+        private static void SetConfigurationValue(string path, string key, string value)
+        {
             var document = new XmlDocument();
             document.PreserveWhitespace = true;
             document.Load(path);
@@ -750,7 +803,7 @@ namespace PrintInterceptorSetup
                 setting.SetAttribute("key", key);
                 appSettings.AppendChild(setting);
             }
-            setting.SetAttribute("value", value.ToString());
+            setting.SetAttribute("value", value);
             document.Save(path);
         }
 
